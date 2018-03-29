@@ -1,3 +1,5 @@
+
+
 /*******************************************************************************
  *
  *   James Bithell
@@ -27,6 +29,8 @@ SLIPEncodedSerial SLIPSerial(Serial);
 #endif
 #include <string.h>
 
+#include <RGBConverter.h>
+
 #include <Wire.h>
 #include "WiiLib.h"
 
@@ -38,32 +42,32 @@ WiiChuck chuck = WiiChuck(); //http://playground.arduino.cc/Main/WiiChuckClass
   ******************************************************************************/
 #define NEXT_BTN      6
 #define LAST_BTN      7
-#define SHIFT_BTN     8
+#define SHIFT_BTN    8
 
 #define REDLED        3
-#define GREENLED      5
-#define BLUELED       6
+#define GREENLED      4
+#define BLUELED      5
 
-#define SUBSCRIBE     ((int32_t)1)
-#define UNSUBSCRIBE     ((int32_t)0)
+#define SUBSCRIBE    ((int32_t)1)
+#define UNSUBSCRIBE    ((int32_t)0)
 
-#define EDGE_DOWN     ((int32_t)1)
-#define EDGE_UP       ((int32_t)0)
+#define EDGE_DOWN    ((int32_t)1)
+#define EDGE_UP      ((int32_t)0)
 
-#define FORWARD      0
-#define REVERSE      1
+#define FORWARD     0
+#define REVERSE     1
 
 // Change these values to switch which direction increase/decrease pan/tilt
-#define PAN_DIR      FORWARD
+#define PAN_DIR     FORWARD
 #define TILT_DIR      FORWARD
 
 // Use these values to make the encoder more coarse or fine. This controls
 // the number of wheel "ticks" the device sends to Eos for each tick of the
 // encoder. 1 is the default and the most fine setting. Must be an integer.
-#define PAN_SCALE      1
+#define PAN_SCALE     1
 #define TILT_SCALE      1
 
-#define SIG_DIGITS      3   // Number of significant digits displayed
+#define SIG_DIGITS      3  // Number of significant digits displayed
 
 #define OSC_BUF_MAX_SIZE  512
 
@@ -108,7 +112,7 @@ bool timeoutPingSent = false;
 uint8_t backlightColourRed = 0;
 uint8_t backlightColourGreen = 0;
 uint8_t backlightColourBlue = 0;
-uint8_t backlightColourBrightness = 0;
+uint8_t backlightColourBrightness = 255;
   
 
 /*******************************************************************************
@@ -127,8 +131,11 @@ uint8_t backlightColourBrightness = 0;
 void issueSubscribes()
 {
   // Add a filter so we don't get spammed with unwanted OSC messages from Eos
+  
   OSCMessage filter("/eos/filter/add");
   filter.add("/eos/out/param/*");
+  filter.add("/eos/out/color/*");
+  filter.add("/eos/out/active/*");
   filter.add("/eos/out/ping");
   SLIPSerial.beginPacket();
   filter.send(SLIPSerial);
@@ -145,34 +152,7 @@ void issueSubscribes()
   subTilt.add(SUBSCRIBE);
   SLIPSerial.beginPacket();
   subTilt.send(SLIPSerial);
-  SLIPSerial.endPacket();
-  
-  // subscribe to Eos Colour updates
-  OSCMessage subRed("/eos/subscribe/param/red");
-  subRed.add(SUBSCRIBE);
-  SLIPSerial.beginPacket();
-  subRed.send(SLIPSerial);
-  SLIPSerial.endPacket();
-  
-  OSCMessage subBlue("/eos/subscribe/param/blue");
-  subBlue.add(SUBSCRIBE);
-  SLIPSerial.beginPacket();
-  subBlue.send(SLIPSerial);
-  SLIPSerial.endPacket();
-  
-  OSCMessage subGreen("/eos/subscribe/param/green");
-  subGreen.add(SUBSCRIBE);
-  SLIPSerial.beginPacket();
-  subGreen.send(SLIPSerial);
-  SLIPSerial.endPacket();
-  
-  /*
-  OSCMessage suibIntensity("/eos/subscribe/at");
-  suibIntensity.add(SUBSCRIBE);
-  SLIPSerial.beginPacket();
-  suibIntensity.send(SLIPSerial);
-  SLIPSerial.endPacket(); 
-  */
+  SLIPSerial.endPacket();  
 }
 
 /*******************************************************************************
@@ -198,25 +178,11 @@ void parseTiltUpdate(OSCMessage& msg, int addressOffset)
   connectedToEos = true; // Update this here just in case we missed the handshake
 }
 
-void parseRedColorUpdate(OSCMessage& msg, int addressOffset)
-{
-  backlightColourRed = int((msg.getOSCData(0)->getFloat())*255);
-  connectedToEos = true; // Update this here just in case we missed the handshake
+void parseColorUpdate(OSCMessage& msg, int addressOffset)
+{ 
+  hsv2rgb(msg.getOSCData(0)->getFloat(),msg.getOSCData(1)->getFloat());
   setBacklight();
-}
-
-void parseGreenColorUpdate(OSCMessage& msg, int addressOffset)
-{
-  backlightColourGreen = int((msg.getOSCData(0)->getFloat())*255);
   connectedToEos = true; // Update this here just in case we missed the handshake
-  setBacklight();
-}
-
-void parseBlueColorUpdate(OSCMessage& msg, int addressOffset)
-{
-  backlightColourBlue = int((msg.getOSCData(0)->getFloat())*255);
-  connectedToEos = true; // Update this here just in case we missed the handshake
-  setBacklight();
 }
 
 void parseIntensityUpdate(OSCMessage& msg, int addressOffset)
@@ -264,10 +230,8 @@ void parseOSCMessage(String& msg)
     // route pan/tilt messages to the relevant update function
     oscmsg.route("/eos/out/param/pan", parsePanUpdate);
     oscmsg.route("/eos/out/param/tilt", parseTiltUpdate);
-    oscmsg.route("/eos/out/param/red", parseRedColorUpdate);
-    oscmsg.route("/eos/out/param/green", parseGreenColorUpdate);
-    oscmsg.route("/eos/out/param/blue", parseBlueColorUpdate);
-    //oscmsg.route("/eos/out/at", parseIntensityUpdate);
+    oscmsg.route("/eos/out/color/hs", parseColorUpdate);
+    //oscmsg.route("/eos/out/active/wheel/1", parseIntensityUpdate);
   }
 }
 
@@ -441,10 +405,32 @@ void checkButtons()
 }
 
 /*******************************************************************************
- * Sets the LED Colour
- *
- *
+ * Convert Colour from Hue and Saturation to RGB
+
  ******************************************************************************/
+
+float hsv2rgb(double h, double s) 
+{
+    uint8_t r,g,b;
+    if (h == 360 && s == 0) {
+      r = 255;
+      g = 255;
+      b = 255;
+    } else {
+      r = 0;
+      g = 0;
+      b = 0;
+    }
+    backlightColourRed = r;
+    backlightColourGreen = g;
+    backlightColourBlue = b;
+}
+
+/*******************************************************************************
+ * Sets the LED Colour
+
+ ******************************************************************************/
+
 void setBacklight() {
   // normalize the red LED - its brighter than the rest!
   backlightColourRed = map(backlightColourRed, 0, 255, 0, 100);
@@ -459,6 +445,15 @@ void setBacklight() {
   analogWrite(REDLED, backlightColourRed);
   analogWrite(GREENLED, backlightColourGreen);
   analogWrite(BLUELED, backlightColourBlue);
+  
+  OSCMessage ping("/eos/ping");
+  ping.add("COLOR SET");
+  ping.add(backlightColourRed);
+  ping.add(backlightColourBlue);
+  ping.add(backlightColourGreen);
+  SLIPSerial.beginPacket();
+  ping.send(SLIPSerial);
+  SLIPSerial.endPacket();
 }
  
 
@@ -580,7 +575,7 @@ void loop()
     if(!timeoutPingSent && diff > PING_AFTER_IDLE_INTERVAL) 
     {
         OSCMessage ping("/eos/ping");
-        ping.add("box1_hello"); // This way we know who is sending the ping
+        ping.add("JBITHELLhello"); // This way we know who is sending the ping
         SLIPSerial.beginPacket();
         ping.send(SLIPSerial);
         SLIPSerial.endPacket();
