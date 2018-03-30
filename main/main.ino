@@ -36,34 +36,16 @@ WiiChuck chuck = WiiChuck(); //http://playground.arduino.cc/Main/WiiChuckClass
  /*******************************************************************************
   * Macros and Constants
   ******************************************************************************/
-#define NEXT_BTN      6
-#define LAST_BTN      7
-#define SHIFT_BTN    8
-
 #define REDLED        3
 #define GREENLED      4
 #define BLUELED      5
+//LCD PIN 15 TO 5V 
 
 #define SUBSCRIBE    ((int32_t)1)
 #define UNSUBSCRIBE    ((int32_t)0)
 
 #define EDGE_DOWN    ((int32_t)1)
 #define EDGE_UP      ((int32_t)0)
-
-#define FORWARD     0
-#define REVERSE     1
-
-// Change these values to switch which direction increase/decrease pan/tilt
-#define PAN_DIR     FORWARD
-#define TILT_DIR      FORWARD
-
-// Use these values to make the encoder more coarse or fine. This controls
-// the number of wheel "ticks" the device sends to Eos for each tick of the
-// encoder. 1 is the default and the most fine setting. Must be an integer.
-#define PAN_SCALE     1
-#define TILT_SCALE      1
-
-#define SIG_DIGITS      3  // Number of significant digits displayed
 
 #define OSC_BUF_MAX_SIZE  512
 
@@ -86,18 +68,8 @@ const String VERSION_STRING = "1.0.0.5";
 enum WHEEL_TYPE { TILT, PAN };
 enum WHEEL_MODE { COARSE, FINE };
 
-struct Encoder
-{
-  uint8_t pinA;
-  uint8_t pinB;
-  int pinAPrevious;
-  int pinBPrevious;
-  float pos;
-  uint8_t direction;
-};
-struct Encoder panWheel;
-struct Encoder tiltWheel;
-
+int joyXPos, joyYPos; //Current position of the nunchuck joystick
+int currentXPos, currentYPos; //Current position of the moving lantern
 /*******************************************************************************
  * Global Variables
  ******************************************************************************/
@@ -108,7 +80,7 @@ bool timeoutPingSent = false;
 uint8_t backlightColourRed = 0;
 uint8_t backlightColourGreen = 0;
 uint8_t backlightColourBlue = 0;
-uint8_t backlightColourBrightness = 255;
+float backlightColourBrightness = 1;
   
 
 /*******************************************************************************
@@ -131,7 +103,7 @@ void issueSubscribes()
   OSCMessage filter("/eos/filter/add");
   filter.add("/eos/out/param/*");
   filter.add("/eos/out/color/*");
-  filter.add("/eos/out/active/*");
+  //filter.add("/eos/out/active/*");
   filter.add("/eos/out/ping");
   SLIPSerial.beginPacket();
   filter.send(SLIPSerial);
@@ -164,31 +136,30 @@ void issueSubscribes()
  ******************************************************************************/
 void parsePanUpdate(OSCMessage& msg, int addressOffset)
 {
-  panWheel.pos = msg.getOSCData(0)->getFloat();
+  currentXPos = msg.getOSCData(0)->getFloat();
   connectedToEos = true; // Update this here just in case we missed the handshake
 }
 
 void parseTiltUpdate(OSCMessage& msg, int addressOffset)
 {
-  tiltWheel.pos = msg.getOSCData(0)->getFloat();
+  currentYPos = msg.getOSCData(0)->getFloat();
   connectedToEos = true; // Update this here just in case we missed the handshake
 }
 
 void parseColorUpdate(OSCMessage& msg, int addressOffset)
 { 
-  hsv2rgb(msg.getOSCData(0)->getFloat(),msg.getOSCData(1)->getFloat());
-  setBacklight();
-  connectedToEos = true; // Update this here just in case we missed the handshake
-}
-
-void parseIntensityUpdate(OSCMessage& msg, int addressOffset)
-{
-  backlightColourBrightness = int((msg.getOSCData(0)->getFloat())*255);
-  if (backlightColourBrightness < 50 && backlightColourBrightness > 0) {
-    backlightColourBrightness = 50;
+       
+  if (msg.getOSCData(0)->getFloat() == 0.000 && msg.getOSCData(1)->getFloat() == 0.000) { //Test for things that basically don't have a colour - such as a dimmer
+    backlightColourBrightness = 0;
+  } else {
+    hsv2rgb(msg.getOSCData(0)->getFloat(),msg.getOSCData(1)->getFloat());
+    if (backlightColourBrightness != 1) {
+      backlightColourBrightness = 1;
+    }
   }
-  connectedToEos = true; // Update this here just in case we missed the handshake
+ 
   setBacklight();
+  connectedToEos = true; // Update this here just in case we missed the handshake
 }
 
 /*******************************************************************************
@@ -227,70 +198,7 @@ void parseOSCMessage(String& msg)
     oscmsg.route("/eos/out/param/pan", parsePanUpdate);
     oscmsg.route("/eos/out/param/tilt", parseTiltUpdate);
     oscmsg.route("/eos/out/color/hs", parseColorUpdate);
-    //oscmsg.route("/eos/out/active/wheel/1", parseIntensityUpdate);
   }
-}
-
-/*******************************************************************************
- * Initializes a given encoder struct to the requested parameters.
- *
- * Parameters:
- *  encoder - Pointer to the encoder we will be initializing
- *  pinA - Where the A pin is connected to the Arduino
- *  pinB - Where the B pin is connected to the Arduino
- *  direction - Determines if clockwise or counterclockwise is "forward"
- *
- * Return Value: void
- *
- ******************************************************************************/
-void initEncoder(struct Encoder* encoder, uint8_t pinA, uint8_t pinB, uint8_t direction)
-{
-  encoder->pinA = pinA;
-  encoder->pinB = pinB;
-  encoder->pos = 0;
-  encoder->direction = direction;
-
-  pinMode(pinA, INPUT_PULLUP);
-  pinMode(pinB, INPUT_PULLUP);
-
-  encoder->pinAPrevious = digitalRead(pinA);
-  encoder->pinBPrevious = digitalRead(pinB);
-}
-
-/*******************************************************************************
- * Checks if the encoder has moved by comparing the previous state of the pins
- * with the current state. If they are different, we know there is movement.
- * In the event of movement we update the current state of our pins.
- *
- * Parameters:
- *  encoder - Pointer to the encoder we will be checking for motion
- *
- * Return Value:
- *  encoderMotion - Returns the 0 if the encoder has not moved
- *                1 for forward motion
- *               -1 for reverse motion
- *
- ******************************************************************************/
-int8_t updateEncoder(struct Encoder* encoder)
-{
-  int8_t encoderMotion = 0;
-  int pinACurrent = digitalRead(encoder->pinA);
-  int pinBCurrent = digitalRead(encoder->pinB);
-
-  // has the encoder moved at all?
-  if (encoder->pinAPrevious != pinACurrent)
-  {
-    // Since it has moved, we must determine if the encoder has moved forwards or backwards
-    encoderMotion = (encoder->pinAPrevious == encoder->pinBPrevious) ? -1 : 1;
-
-    // If we are in reverse mode, flip the direction of the encoder motion
-    if (encoder->direction == REVERSE)
-      encoderMotion = -encoderMotion;
-  }
-  encoder->pinAPrevious = pinACurrent;
-  encoder->pinBPrevious = pinBCurrent;
-
-  return encoderMotion;
 }
 
 /*******************************************************************************
@@ -307,7 +215,7 @@ void sendWheelMove(WHEEL_TYPE type, float ticks)
 {
   String wheelMsg("/eos/wheel");
 
-  if (digitalRead(SHIFT_BTN) == LOW)
+  if (chuck.buttonZ && chuck.buttonC)
     wheelMsg.concat("/fine");
   else
     wheelMsg.concat("/coarse");
@@ -355,10 +263,6 @@ void sendKeyPress(bool down, String key)
 /*******************************************************************************
  * Checks the status of all the buttons relevant to Eos (i.e. Next & Last)
  *
- * NOTE: This does not check the shift key. The shift key is used in tandem with
- * the encoder to determine coarse/fine mode and thus does not report to Eos
- * directly.
- *
  * Parameters: none
  *
  * Return Value: void
@@ -366,37 +270,16 @@ void sendKeyPress(bool down, String key)
  ******************************************************************************/
 void checkButtons()
 {
-  static int nextKeyState = HIGH;
-  static int lastKeyState = HIGH;
-
   // Has the button state changed
-  if (digitalRead(NEXT_BTN) != nextKeyState)
-  {
-    // Notify Eos of this key press
-    if (nextKeyState == LOW)
-    {
-      sendKeyPress(false, "NEXT");
-      nextKeyState = HIGH;
-    }
-    else
-    {
-      sendKeyPress(true, "NEXT");
-      nextKeyState = LOW;
-    }
+  if (chuck.buttonZ) {
+    sendKeyPress(true, "NEXT");
+    delay(150); //DeBounce
+    sendKeyPress(false, "NEXT");
   }
-
-  if (digitalRead(LAST_BTN) != lastKeyState)
-  {
-    if (lastKeyState == LOW)
-    {
-      sendKeyPress(false, "LAST");
-      lastKeyState = HIGH;
-    }
-    else
-    {
-      sendKeyPress(true, "LAST");
-      lastKeyState = LOW;
-    }
+  if (chuck.buttonC) {
+    sendKeyPress(true, "LAST");
+    delay(150); //DeBounce
+    sendKeyPress(false, "LAST");
   }
 }
 
@@ -470,37 +353,14 @@ void hsv2rgb(int hue, int sat) {
 
  ******************************************************************************/
 
-void setBacklight() {
-
-  OSCMessage ping("/eos/ping");
-  ping.add("COLOR SET");
-  ping.add(backlightColourRed);
-  ping.add(backlightColourBlue);
-  ping.add(backlightColourGreen);
-  SLIPSerial.beginPacket();
-  ping.send(SLIPSerial);
-  SLIPSerial.endPacket();
-
+void setBacklight() {  
+  backlightColourRed = backlightColourRed*backlightColourBrightness;
+  backlightColourGreen = backlightColourGreen*backlightColourBrightness;
+  backlightColourBlue = backlightColourBlue*backlightColourBrightness;
   
-  //backlightColourRed = map(backlightColourRed, 0, 255, 0, 100);
-  //backlightColourGreen = map(backlightColourGreen, 0, 255, 0, 150);
-  
-  //backlightColourRed = map(backlightColourRed, 0, 255, 0, backlightColourBrightness);
-  //backlightColourGreen = map(backlightColourGreen, 0, 255, 0, backlightColourBrightness);
-  //backlightColourBlue = map(backlightColourBlue, 0, 255, 0, backlightColourBrightness);
-  // common anode so invert!
   backlightColourRed = map(backlightColourRed, 0, 255, 255, 0);
   backlightColourGreen = map(backlightColourGreen, 0, 255, 255, 0);
   backlightColourBlue = map(backlightColourBlue, 0, 255, 255, 0);
-
-  OSCMessage pingu("/eos/ping");
-  pingu.add("COLOR SET 2 ");
-  pingu.add(backlightColourRed);
-  pingu.add(backlightColourBlue);
-  pingu.add(backlightColourGreen);
-  SLIPSerial.beginPacket();
-  pingu.send(SLIPSerial);
-  SLIPSerial.endPacket();
   
   analogWrite(REDLED, backlightColourRed);
   analogWrite(GREENLED, backlightColourGreen);
@@ -543,12 +403,10 @@ void setup()
   // Let Eos know we want updates on some things
   issueSubscribes();
 
-  initEncoder(&panWheel, A0, A1, PAN_DIR);
-  initEncoder(&tiltWheel, A3, A4, TILT_DIR);
-
-  pinMode(NEXT_BTN, INPUT_PULLUP);
-  pinMode(LAST_BTN, INPUT_PULLUP);
-  pinMode(SHIFT_BTN, INPUT_PULLUP);
+  chuck.begin();
+  chuck.update();
+  chuck.calibrateJoy();
+  
 
   pinMode(REDLED, OUTPUT);
   pinMode(GREENLED, OUTPUT);
@@ -571,27 +429,20 @@ void setup()
  * Return Value: void
  *
  ******************************************************************************/
+
 void loop()
 {
   static String curMsg;
   int size;
-  // get the updated state of each encoder
-  int32_t panMotion = updateEncoder(&panWheel);
-  int32_t tiltMotion = updateEncoder(&tiltWheel);
 
-  // Scale the result by a scaling factor
-  panMotion *= PAN_SCALE;
-  tiltMotion *= TILT_SCALE;
-
-  // check for next/last updates
   checkButtons();
 
-  // now update our wheels
-  if (tiltMotion != 0)
-    sendWheelMove(TILT, tiltMotion);
+  // check satus of chuck
+  if (chuck.readJoyX() != 0)
+    sendWheelMove(PAN, (currentXPos+chuck.readJoyX()));
 
-  if (panMotion != 0)
-    sendWheelMove(PAN, panMotion);
+  if (chuck.readJoyY() != 0)
+    sendWheelMove(TILT, (currentYPos+chuck.readJoyY()));
 
   // Then we check to see if any OSC commands have come from Eos
   // and update the display accordingly.
@@ -628,7 +479,7 @@ void loop()
     if(!timeoutPingSent && diff > PING_AFTER_IDLE_INTERVAL) 
     {
         OSCMessage ping("/eos/ping");
-        ping.add("JBITHELLhello"); // This way we know who is sending the ping
+        ping.add("arduinoHello"); // This way we know who is sending the ping
         SLIPSerial.beginPacket();
         ping.send(SLIPSerial);
         SLIPSerial.endPacket();
