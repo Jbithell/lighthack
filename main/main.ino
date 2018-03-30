@@ -1,5 +1,3 @@
-
-
 /*******************************************************************************
  *
  *   James Bithell
@@ -28,8 +26,6 @@ SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
 SLIPEncodedSerial SLIPSerial(Serial);
 #endif
 #include <string.h>
-
-#include <RGBConverter.h>
 
 #include <Wire.h>
 #include "WiiLib.h"
@@ -406,20 +402,63 @@ void checkButtons()
 
 /*******************************************************************************
  * Convert Colour from Hue and Saturation to RGB
+ * Stolen from https://www.kasperkamperman.com/blog/arduino/arduino-programming-hsb-to-rgb/
 
  ******************************************************************************/
-
-float hsv2rgb(double h, double s) 
-{
-    uint8_t r,g,b;
-    if (h == 360 && s == 0) {
-      r = 255;
-      g = 255;
-      b = 255;
-    } else {
-      r = 0;
-      g = 0;
-      b = 0;
+void hsv2rgb(int hue, int sat) { 
+  int val = 255;
+  sat = sat*2.55; //Get it to 255 as max 
+  
+  int r;
+  int g;
+  int b;
+  int base;
+ 
+  if (sat == 0) { // Acromatic color (gray). Hue doesn't mind.
+    r=val;
+    g=val;
+    b=val;  
+  } else  { 
+ 
+    base = ((255 - sat) * val)>>8;
+ 
+    switch(hue/60) {
+      case 0:
+          r = val;
+          g = (((val-base)*hue)/60)+base;
+          b = base;
+      break;
+   
+      case 1:
+          r = (((val-base)*(60-(hue%60)))/60)+base;
+          g = val;
+          b = base;
+      break;
+   
+      case 2:
+          r = base;
+          g = val;
+          b = (((val-base)*(hue%60))/60)+base;
+      break;
+   
+      case 3:
+          r = base;
+          g = (((val-base)*(60-(hue%60)))/60)+base;
+          b = val;
+      break;
+   
+      case 4:
+          r = (((val-base)*(hue%60))/60)+base;
+          g = base;
+          b = val;
+      break;
+   
+      case 5:
+          r = val;
+          g = base;
+          b = (((val-base)*(60-(hue%60)))/60)+base;
+      break;
+      }
     }
     backlightColourRed = r;
     backlightColourGreen = g;
@@ -432,20 +471,7 @@ float hsv2rgb(double h, double s)
  ******************************************************************************/
 
 void setBacklight() {
-  // normalize the red LED - its brighter than the rest!
-  backlightColourRed = map(backlightColourRed, 0, 255, 0, 100);
-  backlightColourGreen = map(backlightColourGreen, 0, 255, 0, 150);
-  backlightColourRed = map(backlightColourRed, 0, 255, 0, backlightColourBrightness);
-  backlightColourGreen = map(backlightColourGreen, 0, 255, 0, backlightColourBrightness);
-  backlightColourBlue = map(backlightColourBlue, 0, 255, 0, backlightColourBrightness);
-  // common anode so invert!
-  backlightColourRed = map(backlightColourRed, 0, 255, 255, 0);
-  backlightColourGreen = map(backlightColourGreen, 0, 255, 255, 0);
-  backlightColourBlue = map(backlightColourBlue, 0, 255, 255, 0);
-  analogWrite(REDLED, backlightColourRed);
-  analogWrite(GREENLED, backlightColourGreen);
-  analogWrite(BLUELED, backlightColourBlue);
-  
+
   OSCMessage ping("/eos/ping");
   ping.add("COLOR SET");
   ping.add(backlightColourRed);
@@ -454,6 +480,33 @@ void setBacklight() {
   SLIPSerial.beginPacket();
   ping.send(SLIPSerial);
   SLIPSerial.endPacket();
+
+  
+  //backlightColourRed = map(backlightColourRed, 0, 255, 0, 100);
+  //backlightColourGreen = map(backlightColourGreen, 0, 255, 0, 150);
+  
+  //backlightColourRed = map(backlightColourRed, 0, 255, 0, backlightColourBrightness);
+  //backlightColourGreen = map(backlightColourGreen, 0, 255, 0, backlightColourBrightness);
+  //backlightColourBlue = map(backlightColourBlue, 0, 255, 0, backlightColourBrightness);
+  // common anode so invert!
+  backlightColourRed = map(backlightColourRed, 0, 255, 255, 0);
+  backlightColourGreen = map(backlightColourGreen, 0, 255, 255, 0);
+  backlightColourBlue = map(backlightColourBlue, 0, 255, 255, 0);
+
+  OSCMessage pingu("/eos/ping");
+  pingu.add("COLOR SET 2 ");
+  pingu.add(backlightColourRed);
+  pingu.add(backlightColourBlue);
+  pingu.add(backlightColourGreen);
+  SLIPSerial.beginPacket();
+  pingu.send(SLIPSerial);
+  SLIPSerial.endPacket();
+  
+  analogWrite(REDLED, backlightColourRed);
+  analogWrite(GREENLED, backlightColourGreen);
+  analogWrite(BLUELED, backlightColourBlue);
+  
+
 }
  
 
