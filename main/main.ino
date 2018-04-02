@@ -68,8 +68,9 @@ const String VERSION_STRING = "1.0.0.5";
 enum WHEEL_TYPE { TILT, PAN };
 enum WHEEL_MODE { COARSE, FINE };
 
-int joyXPos, joyYPos; //Current position of the nunchuck joystick
 int currentXPos, currentYPos; //Current position of the moving lantern
+unsigned long zLastPressed, cLastPressed;
+
 /*******************************************************************************
  * Global Variables
  ******************************************************************************/
@@ -211,27 +212,31 @@ void parseOSCMessage(String& msg)
  * Return Value: void
  *
  ******************************************************************************/
-void sendWheelMove(WHEEL_TYPE type, float ticks)
+void sendWheelMove(int x, int y)
 {
-  String wheelMsg("/eos/wheel");
+  String wheelMsgA = "/eos/wheel";
+  String wheelMsgB = "/eos/wheel";
 
-  if (chuck.buttonZ && chuck.buttonC)
-    wheelMsg.concat("/fine");
-  else
-    wheelMsg.concat("/coarse");
-
-  if (type == PAN)
-    wheelMsg.concat("/pan");
-  else if (type == TILT)
-    wheelMsg.concat("/tilt");
-  else
-    // something has gone very wrong
-    return;
-
-  OSCMessage wheelUpdate(wheelMsg.c_str());
-  wheelUpdate.add(ticks);
+  if (chuck.buttonZ && chuck.buttonC) {
+    wheelMsgA.concat("/fine");
+    wheelMsgB.concat("/fine");
+  } else {
+    wheelMsgA.concat("/coarse");
+    wheelMsgB.concat("/coarse");
+  }
+  wheelMsgA.concat("/pan");
+  wheelMsgB.concat("/tilt");
+  
+  OSCMessage wheelUpdateA(wheelMsgA.c_str());
+  wheelUpdateA.add(x);
   SLIPSerial.beginPacket();
-  wheelUpdate.send(SLIPSerial);
+  wheelUpdateA.send(SLIPSerial);
+  SLIPSerial.endPacket();
+
+  OSCMessage wheelUpdateB(wheelMsgB.c_str());
+  wheelUpdateB.add(y);
+  SLIPSerial.beginPacket();
+  wheelUpdateB.send(SLIPSerial);
   SLIPSerial.endPacket();
 }
 
@@ -268,18 +273,20 @@ void sendKeyPress(bool down, String key)
  * Return Value: void
  *
  ******************************************************************************/
+
+ 
 void checkButtons()
 {
   // Has the button state changed
-  if (chuck.buttonZ) {
+  if (chuck.buttonZ && !chuck.buttonC && zLastPressed > 300) {
     sendKeyPress(true, "NEXT");
-    delay(150); //DeBounce
     sendKeyPress(false, "NEXT");
+    zLastPressed = millis();
   }
-  if (chuck.buttonC) {
+  if (chuck.buttonC && !chuck.buttonZ && cLastPressed > 300) {
     sendKeyPress(true, "LAST");
-    delay(150); //DeBounce
     sendKeyPress(false, "LAST");
+    cLastPressed = millis();
   }
 }
 
@@ -406,8 +413,11 @@ void setup()
   chuck.begin();
   chuck.update();
   chuck.calibrateJoy();
-  
 
+
+  zLastPressed = millis();
+  cLastPressed = millis();
+  
   pinMode(REDLED, OUTPUT);
   pinMode(GREENLED, OUTPUT);
   pinMode(BLUELED, OUTPUT);
@@ -435,14 +445,14 @@ void loop()
   static String curMsg;
   int size;
 
+  delay(20); //Needed to not break chuck
+  chuck.update();
   checkButtons();
 
   // check satus of chuck
-  if (chuck.readJoyX() != 0)
-    sendWheelMove(PAN, (currentXPos+chuck.readJoyX()));
-
-  if (chuck.readJoyY() != 0)
-    sendWheelMove(TILT, (currentYPos+chuck.readJoyY()));
+  if (chuck.readJoyX() != 0 || chuck.readJoyY() != 0) {
+    sendWheelMove((currentXPos+chuck.readJoyX()), (currentXPos+chuck.readJoyY()));
+  }
 
   // Then we check to see if any OSC commands have come from Eos
   // and update the display accordingly.
