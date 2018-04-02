@@ -67,8 +67,6 @@ const String VERSION_STRING = "1.0.0.5";
  ******************************************************************************/
 enum WHEEL_TYPE { TILT, PAN };
 enum WHEEL_MODE { COARSE, FINE };
-
-int currentXPos, currentYPos; //Current position of the moving lantern
 unsigned long zLastPressed, cLastPressed;
 
 /*******************************************************************************
@@ -109,19 +107,6 @@ void issueSubscribes()
   SLIPSerial.beginPacket();
   filter.send(SLIPSerial);
   SLIPSerial.endPacket();
-
-  // subscribe to Eos pan & tilt updates
-  OSCMessage subPan("/eos/subscribe/param/pan");
-  subPan.add(SUBSCRIBE);
-  SLIPSerial.beginPacket();
-  subPan.send(SLIPSerial);
-  SLIPSerial.endPacket();
-
-  OSCMessage subTilt("/eos/subscribe/param/tilt");
-  subTilt.add(SUBSCRIBE);
-  SLIPSerial.beginPacket();
-  subTilt.send(SLIPSerial);
-  SLIPSerial.endPacket();  
 }
 
 /*******************************************************************************
@@ -135,17 +120,6 @@ void issueSubscribes()
  * Return Value: void
  *
  ******************************************************************************/
-void parsePanUpdate(OSCMessage& msg, int addressOffset)
-{
-  currentXPos = msg.getOSCData(0)->getFloat();
-  connectedToEos = true; // Update this here just in case we missed the handshake
-}
-
-void parseTiltUpdate(OSCMessage& msg, int addressOffset)
-{
-  currentYPos = msg.getOSCData(0)->getFloat();
-  connectedToEos = true; // Update this here just in case we missed the handshake
-}
 
 void parseColorUpdate(OSCMessage& msg, int addressOffset)
 { 
@@ -196,8 +170,6 @@ void parseOSCMessage(String& msg)
     OSCMessage oscmsg;
     oscmsg.fill((uint8_t*)msg.c_str(), (int)msg.length());
     // route pan/tilt messages to the relevant update function
-    oscmsg.route("/eos/out/param/pan", parsePanUpdate);
-    oscmsg.route("/eos/out/param/tilt", parseTiltUpdate);
     oscmsg.route("/eos/out/color/hs", parseColorUpdate);
   }
 }
@@ -220,9 +192,13 @@ void sendWheelMove(int x, int y)
   if (chuck.buttonZ && chuck.buttonC) {
     wheelMsgA.concat("/fine");
     wheelMsgB.concat("/fine");
+    x = x*3; //Calibration Factor
+    y = y*1.5; //Calibration Factor  - Y has lower range on most movers
   } else {
     wheelMsgA.concat("/coarse");
     wheelMsgB.concat("/coarse");
+    x = x*0.3; //Calibration Factor
+    y = y*0.15; //Calibration Factor - Y has lower range on most movers
   }
   wheelMsgA.concat("/pan");
   wheelMsgB.concat("/tilt");
@@ -278,15 +254,25 @@ void sendKeyPress(bool down, String key)
 void checkButtons()
 {
   // Has the button state changed
-  if (chuck.buttonZ && !chuck.buttonC && zLastPressed > 300) {
-    sendKeyPress(true, "NEXT");
-    sendKeyPress(false, "NEXT");
-    zLastPressed = millis();
+  if (chuck.buttonZ && !chuck.buttonC && zLastPressed < (millis()-200)) {
+    delay(200);
+    if (!chuck.buttonC) { //Try and detect if the C button is pressed later on - for example if they chose to push both to slow down speed
+      sendKeyPress(true, "NEXT");
+      sendKeyPress(false, "NEXT");
+      zLastPressed = millis();
+    }
   }
-  if (chuck.buttonC && !chuck.buttonZ && cLastPressed > 300) {
-    sendKeyPress(true, "LAST");
-    sendKeyPress(false, "LAST");
-    cLastPressed = millis();
+  if (chuck.buttonC && !chuck.buttonZ && cLastPressed < (millis()-200)) {
+    delay(200);
+    if (!chuck.buttonZ) { //Try and detect if the Z button is pressed later on - for example if they chose to push both to slow down speed
+      sendKeyPress(true, "LAST");
+      sendKeyPress(false, "LAST");
+      cLastPressed = millis();
+    }
+  }
+  if (chuck.buttonC && chuck.buttonZ) {
+    zLastPressed = millis()+200;
+    cLastPressed = millis()+200; //Make an even bigger delay after you release both keys to stop it jumping straight to a button 
   }
 }
 
@@ -451,7 +437,7 @@ void loop()
 
   // check satus of chuck
   if (chuck.readJoyX() != 0 || chuck.readJoyY() != 0) {
-    sendWheelMove((currentXPos+chuck.readJoyX()), (currentXPos+chuck.readJoyY()));
+    sendWheelMove(chuck.readJoyX(), chuck.readJoyY());
   }
 
   // Then we check to see if any OSC commands have come from Eos
