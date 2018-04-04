@@ -149,8 +149,6 @@ void parseOSCMessage(String& msg)
     // Let Eos know we want updates on some things
     issueSubscribes();
 
-    // Make our splash screen go away
-    connectedToEos = true;
   }
   else
   {
