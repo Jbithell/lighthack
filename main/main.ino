@@ -1,11 +1,10 @@
 /*******************************************************************************
  *
- *   James Bithell
+ *   Nunchuck as moving light controller LightHack
+ *   
+ *   https://github.com/ETCLabs/lighthack
  *
- *   LightHack with Nunchuck
- *
- *   Original Code (c) 2017 by ETC
- *   Remainder (c) 2018 James Bithell
+ *   (c) 2018 ETC &James Bithell
  *
  ******************************************************************************/
 
@@ -63,17 +62,10 @@ const String VERSION_STRING = "1.0.0.5";
 #define TIMEOUT_AFTER_IDLE_INTERVAL 5000
 
 /*******************************************************************************
- * Local Types
- ******************************************************************************/
-enum WHEEL_TYPE { TILT, PAN };
-enum WHEEL_MODE { COARSE, FINE };
-unsigned long zLastPressed, cLastPressed;
 
-/*******************************************************************************
  * Global Variables
  ******************************************************************************/
-
-bool connectedToEos = false;
+unsigned long zLastPressed, cLastPressed;
 unsigned long lastMessageRxTime = 0;
 bool timeoutPingSent = false;
 uint8_t backlightColourRed = 0;
@@ -100,12 +92,9 @@ void issueSubscribes()
   // Add a filter so we don't get spammed with unwanted OSC messages from Eos
   
   OSCMessage filter("/eos/filter/add");
-  filter.add("/eos/out/param/*");
   filter.add("/eos/out/color/*");
-  //filter.add("/eos/out/active/*");
   filter.add("/eos/out/ping");
   SLIPSerial.beginPacket();
-  filter.send(SLIPSerial);
   SLIPSerial.endPacket();
 }
 
@@ -134,7 +123,6 @@ void parseColorUpdate(OSCMessage& msg, int addressOffset)
   }
  
   setBacklight();
-  connectedToEos = true; // Update this here just in case we missed the handshake
 }
 
 /*******************************************************************************
@@ -192,13 +180,13 @@ void sendWheelMove(int x, int y)
   if (chuck.buttonZ && chuck.buttonC) {
     wheelMsgA.concat("/fine");
     wheelMsgB.concat("/fine");
-    x = x*3; //Calibration Factor
-    y = y*1.5; //Calibration Factor  - Y has lower range on most movers
+    x = x*3; //Calibration Factor for fine
+    y = y*1.5; //Calibration Factor  - Y has smaller range on most moving lights
   } else {
     wheelMsgA.concat("/coarse");
     wheelMsgB.concat("/coarse");
-    x = x*0.3; //Calibration Factor
-    y = y*0.15; //Calibration Factor - Y has lower range on most movers
+    x = x*0.3; //Calibration Factor for coarse
+    y = y*0.15; //Calibration Factor - Y has smaller range on most moving lights
   }
   wheelMsgA.concat("/pan");
   wheelMsgB.concat("/tilt");
@@ -226,19 +214,21 @@ void sendWheelMove(int x, int y)
  * Return Value: void
  *
  ******************************************************************************/
-void sendKeyPress(bool down, String key)
+void sendKeyPress(String key)
 {
   key = "/eos/key/" + key;
   OSCMessage keyMsg(key.c_str());
-
-  if (down)
-    keyMsg.add(EDGE_DOWN);
-  else
-    keyMsg.add(EDGE_UP);
-
+  keyMsg.add(EDGE_DOWN);
   SLIPSerial.beginPacket();
   keyMsg.send(SLIPSerial);
   SLIPSerial.endPacket();
+  
+  OSCMessage keyMsgUp(key.c_str());
+  keyMsgUp.add(EDGE_UP);
+  SLIPSerial.beginPacket();
+  keyMsgUp.send(SLIPSerial);
+  SLIPSerial.endPacket();
+  
 }
 
 /*******************************************************************************
@@ -249,24 +239,19 @@ void sendKeyPress(bool down, String key)
  * Return Value: void
  *
  ******************************************************************************/
-
- 
 void checkButtons()
 {
-  // Has the button state changed
-  if (chuck.buttonZ && !chuck.buttonC && zLastPressed < (millis()-200)) {
-    delay(200);
-    if (!chuck.buttonC) { //Try and detect if the C button is pressed later on - for example if they chose to push both to slow down speed
-      sendKeyPress(true, "NEXT");
-      sendKeyPress(false, "NEXT");
+  if (chuck.buttonZ && !chuck.buttonC && zLastPressed < (millis()-1000)) {
+    delay(500);
+    if (!chuck.buttonC) { //If after 300 seconds the C button isn't depressed it means this isn't a false trigger as they try and push both buttons together - so go ahead and send a keypress
+      sendKeyPress("NEXT");
       zLastPressed = millis();
     }
   }
-  if (chuck.buttonC && !chuck.buttonZ && cLastPressed < (millis()-200)) {
-    delay(200);
-    if (!chuck.buttonZ) { //Try and detect if the Z button is pressed later on - for example if they chose to push both to slow down speed
-      sendKeyPress(true, "LAST");
-      sendKeyPress(false, "LAST");
+  if (chuck.buttonC && !chuck.buttonZ && cLastPressed < (millis()-1000)) {
+    delay(500);
+    if (!chuck.buttonZ) { //If after 500 seconds the Z button isn't depressed it means this isn't a false trigger as they try and push both buttons together - so go ahead and send a keypress
+      sendKeyPress("LAST");
       cLastPressed = millis();
     }
   }
@@ -420,10 +405,6 @@ void setup()
  * NOTE: This function is our main loop and thus this function will be called
  * repeatedly forever
  *
- * Parameters: none
- *
- * Return Value: void
- *
  ******************************************************************************/
 
 void loop()
@@ -431,11 +412,11 @@ void loop()
   static String curMsg;
   int size;
 
-  delay(20); //Needed to not break chuck
-  chuck.update();
+  delay(20); //Try not to overcheck on the Chuck
+  chuck.update(); //Request position of buttons & joystick
   checkButtons();
 
-  // check satus of chuck
+  // check satus of chuck joystick
   if (chuck.readJoyX() != 0 || chuck.readJoyY() != 0) {
     sendWheelMove(chuck.readJoyX(), chuck.readJoyY());
   }
@@ -465,7 +446,6 @@ void loop()
     //We first check if it's been too long and we need to time out
     if(diff > TIMEOUT_AFTER_IDLE_INTERVAL) 
     {
-      connectedToEos = false;
       lastMessageRxTime = 0;
       timeoutPingSent = false;
     }
@@ -484,4 +464,3 @@ void loop()
   }
 
 }
-
